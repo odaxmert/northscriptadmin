@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NorthScript Yönetim Paneli</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3b82f6',
+                        dark: '#1e293b'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans antialiased h-screen flex flex-col">
+
+    <!-- Header -->
+    <header class="bg-dark text-white shadow-md p-4 flex justify-between items-center">
+        <h1 class="text-xl font-bold"><i class="fa-solid fa-bolt mr-2 text-yellow-400"></i>NorthScript Panel</h1>
+        <div>
+            <button onclick="fetchData()" class="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded mr-2 transition"><i class="fa-solid fa-sync mr-2"></i>Yenile</button>
+            <button onclick="openSettings()" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded transition"><i class="fa-solid fa-cog mr-2"></i>Ayarlar</button>
+        </div>
+    </header>
+
+    <div class="flex-1 flex overflow-hidden">
+        <!-- Sidebar: Folders -->
+        <aside class="w-1/3 bg-white border-r border-gray-200 p-4 overflow-y-auto flex flex-col">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-semibold text-gray-700">Klasörler</h2>
+                <button onclick="openFolderModal()" class="text-primary hover:text-blue-700"><i class="fa-solid fa-plus text-xl"></i></button>
+            </div>
+            <div id="folderList" class="space-y-2 flex-1">
+                <!-- Folders will be injected here -->
+                <p class="text-gray-500 text-sm text-center mt-10">Veri yükleniyor...</p>
+            </div>
+        </aside>
+
+        <!-- Main Content: Scripts -->
+        <main class="w-2/3 bg-gray-50 p-6 overflow-y-auto">
+            <div id="scriptsHeader" class="hidden mb-6 flex justify-between items-center border-b pb-4">
+                <div>
+                    <h2 id="currentFolderName" class="text-2xl font-bold text-gray-800">Seçili Klasör</h2>
+                    <p id="currentFolderHotkey" class="text-sm text-gray-500 mt-1"></p>
+                </div>
+                <div>
+                    <button onclick="editCurrentFolder()" class="text-gray-500 hover:text-gray-800 mr-3"><i class="fa-solid fa-edit"></i></button>
+                    <button onclick="deleteCurrentFolder()" class="text-red-500 hover:text-red-700 mr-4"><i class="fa-solid fa-trash"></i></button>
+                    <button onclick="openScriptModal()" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded shadow transition"><i class="fa-solid fa-plus mr-2"></i>Script Ekle</button>
+                </div>
+            </div>
+            
+            <div id="scriptList" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Scripts will be injected here -->
+                <div id="emptyScriptsMsg" class="col-span-full text-center text-gray-400 mt-20">
+                    <i class="fa-solid fa-folder-open text-4xl mb-3"></i>
+                    <p>Lütfen soldan bir klasör seçin.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg p-6 w-96 shadow-xl">
+            <h3 class="text-lg font-bold mb-4">Ayarlar</h3>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Firebase Realtime DB URL</label>
+                <input type="text" id="firebaseUrl" class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:border-primary" placeholder="https://projeniz.firebaseio.com">
+                <p class="text-xs text-gray-500 mt-1">Sonunda slash (/) olmasa da olur.</p>
+            </div>
+            <div class="flex justify-end space-x-2">
+                <button onclick="closeSettings()" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">İptal</button>
+                <button onclick="saveSettings()" class="px-4 py-2 bg-primary text-white rounded hover:bg-blue-600">Kaydet</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Folder Modal -->
+    <div id="folderModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg p-6 w-96 shadow-xl">
+            <h3 id="folderModalTitle" class="text-lg font-bold mb-4">Yeni Klasör</h3>
+            <input type="hidden" id="folderId">
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Klasör Adı</label>
+                <input type="text" id="folderName" class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:border-primary">
+            </div>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Kısayol (Global Hotkey)</label>
+                <input type="text" id="folderHotkey" class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:border-primary" placeholder="Örn: <ctrl>+q veya <alt>+1">
+                <p class="text-xs text-gray-500 mt-1">Pynput formatı: &lt;ctrl&gt;+q , &lt;alt&gt;+w vb.</p>
+            </div>
+            <div class="flex justify-end space-x-2">
+                <button onclick="closeFolderModal()" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">İptal</button>
+                <button onclick="saveFolder()" class="px-4 py-2 bg-primary text-white rounded hover:bg-blue-600">Kaydet</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script Modal -->
+    <div id="scriptModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg p-6 w-[500px] shadow-xl">
+            <h3 id="scriptModalTitle" class="text-lg font-bold mb-4">Yeni Script</h3>
+            <input type="hidden" id="scriptId">
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Başlık</label>
+                <input type="text" id="scriptName" class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:border-primary">
+            </div>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Metin İçeriği</label>
+                <textarea id="scriptContent" rows="5" class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:border-primary" placeholder="Yazdırılacak metin..."></textarea>
+            </div>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Özel Kısayol (İsteğe Bağlı)</label>
+                <input type="text" id="scriptHotkey" class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:border-primary" placeholder="Örn: <ctrl>+<alt>+1">
+            </div>
+            <div class="flex justify-end space-x-2">
+                <button onclick="closeScriptModal()" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">İptal</button>
+                <button onclick="saveScript()" class="px-4 py-2 bg-primary text-white rounded hover:bg-blue-600">Kaydet</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let dbUrl = localStorage.getItem('northscript_db_url') || '';
+        let appData = { folders: {} };
+        let currentFolderId = null;
+
+        // Ensure URL is correctly formatted
+        function getDbUrl() {
+            if(!dbUrl) return null;
+            let url = dbUrl.trim();
+            if(url.endsWith('/')) url = url.slice(0, -1);
+            return url + '/.json';
+        }
+
+        async function fetchData() {
+            if (!dbUrl) {
+                document.getElementById('folderList').innerHTML = '<p class="text-red-500 text-sm p-4">Lütfen ayarlardan Firebase URL\'sini girin.</p>';
+                openSettings();
+                return;
+            }
+            try {
+                const res = await fetch(getDbUrl());
+                const data = await res.json();
+                appData = data || { folders: {} };
+                if(!appData.folders) appData.folders = {};
+                renderFolders();
+                if (currentFolderId && appData.folders[currentFolderId]) {
+                    selectFolder(currentFolderId);
+                } else {
+                    currentFolderId = null;
+                    document.getElementById('scriptsHeader').classList.add('hidden');
+                    document.getElementById('scriptList').innerHTML = '<div class="col-span-full text-center text-gray-400 mt-20"><i class="fa-solid fa-folder-open text-4xl mb-3"></i><p>Lütfen soldan bir klasör seçin.</p></div>';
+                }
+            } catch (error) {
+                alert('Veri çekilirken hata oluştu: ' + error.message);
+            }
+        }
+
+        async function saveData() {
+            if (!dbUrl) return;
+            try {
+                await fetch(getDbUrl(), {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(appData)
+                });
+            } catch (error) {
+                alert('Veri kaydedilirken hata oluştu: ' + error.message);
+            }
+        }
+
+        function generateId() {
+            return Math.random().toString(36).substr(2, 9);
+        }
+
+        // --- Render Functions ---
+        function renderFolders() {
+            const list = document.getElementById('folderList');
+            list.innerHTML = '';
+            const folders = appData.folders;
+            for (const [id, f] of Object.entries(folders)) {
+                const isSelected = id === currentFolderId;
+                const activeClass = isSelected ? 'bg-blue-50 border-blue-500 border-l-4' : 'hover:bg-gray-50 border-l-4 border-transparent';
+                list.innerHTML += `
+                    <div onclick="selectFolder('${id}')" class="cursor-pointer p-3 rounded shadow-sm bg-white ${activeClass} transition">
+                        <div class="font-bold text-gray-800">${f.name}</div>
+                        <div class="text-xs text-gray-500 font-mono mt-1"><i class="fa-solid fa-keyboard mr-1"></i>${f.hotkey || 'Yok'}</div>
+                    </div>
+                `;
+            }
+        }
+
+        function selectFolder(id) {
+            currentFolderId = id;
+            renderFolders();
+            const f = appData.folders[id];
+            
+            document.getElementById('scriptsHeader').classList.remove('hidden');
+            document.getElementById('currentFolderName').innerText = f.name;
+            document.getElementById('currentFolderHotkey').innerText = f.hotkey ? 'Kısayol: ' + f.hotkey : '';
+            
+            const slist = document.getElementById('scriptList');
+            slist.innerHTML = '';
+            
+            const scripts = f.scripts || {};
+            if (Object.keys(scripts).length === 0) {
+                slist.innerHTML = '<div class="col-span-full text-center text-gray-400 py-10">Bu klasörde henüz script yok.</div>';
+                return;
+            }
+
+            for (const [sid, s] of Object.entries(scripts)) {
+                slist.innerHTML += `
+                    <div class="bg-white p-4 rounded-lg shadow border border-gray-100 flex flex-col justify-between">
+                        <div>
+                            <div class="flex justify-between items-start mb-2">
+                                <h4 class="font-bold text-gray-800">${s.name}</h4>
+                                <div class="space-x-2 text-sm">
+                                    <button onclick="editScript('${sid}')" class="text-gray-400 hover:text-blue-500"><i class="fa-solid fa-pen"></i></button>
+                                    <button onclick="deleteScript('${sid}')" class="text-gray-400 hover:text-red-500"><i class="fa-solid fa-trash"></i></button>
+                                </div>
+                            </div>
+                            <p class="text-sm text-gray-600 mb-3 line-clamp-3">${s.content}</p>
+                        </div>
+                        <div class="text-xs text-gray-400 font-mono bg-gray-50 p-2 rounded">
+                            <i class="fa-solid fa-bolt mr-1"></i> ${s.hotkey || 'Menüden Seçilecek'}
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        // --- Settings ---
+        function openSettings() {
+            document.getElementById('firebaseUrl').value = dbUrl;
+            document.getElementById('settingsModal').classList.remove('hidden');
+        }
+        function closeSettings() {
+            document.getElementById('settingsModal').classList.add('hidden');
+        }
+        function saveSettings() {
+            dbUrl = document.getElementById('firebaseUrl').value;
+            localStorage.setItem('northscript_db_url', dbUrl);
+            closeSettings();
+            fetchData();
+        }
+
+        // --- Folder Modal ---
+        function openFolderModal(id = null) {
+            if (id) {
+                const f = appData.folders[id];
+                document.getElementById('folderId').value = id;
+                document.getElementById('folderName').value = f.name;
+                document.getElementById('folderHotkey').value = f.hotkey || '';
+                document.getElementById('folderModalTitle').innerText = 'Klasörü Düzenle';
+            } else {
+                document.getElementById('folderId').value = '';
+                document.getElementById('folderName').value = '';
+                document.getElementById('folderHotkey').value = '';
+                document.getElementById('folderModalTitle').innerText = 'Yeni Klasör';
+            }
+            document.getElementById('folderModal').classList.remove('hidden');
+        }
+        function closeFolderModal() { document.getElementById('folderModal').classList.add('hidden'); }
+        async function saveFolder() {
+            const id = document.getElementById('folderId').value || 'f_' + generateId();
+            const name = document.getElementById('folderName').value.trim();
+            const hotkey = document.getElementById('folderHotkey').value.trim();
+            
+            if (!name) return alert('Klasör adı boş olamaz.');
+            
+            if (!appData.folders[id]) {
+                appData.folders[id] = { scripts: {} };
+            }
+            appData.folders[id].name = name;
+            appData.folders[id].hotkey = hotkey;
+            
+            await saveData();
+            closeFolderModal();
+            fetchData();
+        }
+        function editCurrentFolder() {
+            if(currentFolderId) openFolderModal(currentFolderId);
+        }
+        async function deleteCurrentFolder() {
+            if(!currentFolderId) return;
+            if(confirm('Bu klasörü ve içindeki tüm scriptleri silmek istediğinize emin misiniz?')) {
+                delete appData.folders[currentFolderId];
+                currentFolderId = null;
+                await saveData();
+                fetchData();
+            }
+        }
+
+        // --- Script Modal ---
+        function openScriptModal(sid = null) {
+            if (!currentFolderId) return alert('Önce bir klasör seçin.');
+            if (sid) {
+                const s = appData.folders[currentFolderId].scripts[sid];
+                document.getElementById('scriptId').value = sid;
+                document.getElementById('scriptName').value = s.name;
+                document.getElementById('scriptContent').value = s.content;
+                document.getElementById('scriptHotkey').value = s.hotkey || '';
+                document.getElementById('scriptModalTitle').innerText = 'Script Düzenle';
+            } else {
+                document.getElementById('scriptId').value = '';
+                document.getElementById('scriptName').value = '';
+                document.getElementById('scriptContent').value = '';
+                document.getElementById('scriptHotkey').value = '';
+                document.getElementById('scriptModalTitle').innerText = 'Yeni Script';
+            }
+            document.getElementById('scriptModal').classList.remove('hidden');
+        }
+        function closeScriptModal() { document.getElementById('scriptModal').classList.add('hidden'); }
+        async function saveScript() {
+            if (!currentFolderId) return;
+            const sid = document.getElementById('scriptId').value || 's_' + generateId();
+            const name = document.getElementById('scriptName').value.trim();
+            const content = document.getElementById('scriptContent').value.trim();
+            const hotkey = document.getElementById('scriptHotkey').value.trim();
+            
+            if (!name || !content) return alert('Başlık ve metin içeriği boş olamaz.');
+            
+            if(!appData.folders[currentFolderId].scripts) {
+                appData.folders[currentFolderId].scripts = {};
+            }
+            
+            appData.folders[currentFolderId].scripts[sid] = {
+                name: name,
+                content: content,
+                hotkey: hotkey
+            };
+            
+            await saveData();
+            closeScriptModal();
+            fetchData();
+        }
+        function editScript(sid) { openScriptModal(sid); }
+        async function deleteScript(sid) {
+            if(confirm('Bu scripti silmek istediğinize emin misiniz?')) {
+                delete appData.folders[currentFolderId].scripts[sid];
+                await saveData();
+                fetchData();
+            }
+        }
+
+        // Init
+        window.onload = fetchData;
+    </script>
+</body>
+</html>
