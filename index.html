@@ -150,13 +150,18 @@
 
         async function saveData() {
             try {
-                await fetch(FIREBASE_URL, {
+                const res = await fetch(FIREBASE_URL, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(appData)
                 });
+                if (!res.ok) {
+                    if (res.status === 429) throw new Error("Çok fazla istek yapıldı (Rate Limit). Lütfen 1 dakika bekleyip tekrar deneyin.");
+                    throw new Error(`HTTP Hata: ${res.status}`);
+                }
             } catch (e) {
-                alert("Veri kaydedilemedi!");
+                alert("Veri kaydedilemedi!\nNedeni: " + e.message);
+                throw e; // throw error so saveModalItem can catch or at least stop execution
             }
         }
 
