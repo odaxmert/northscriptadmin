@@ -156,28 +156,19 @@
             "<ctrl>+<alt>+q", "<ctrl>+<alt>+w", "<ctrl>+<alt>+e", "<ctrl>+<alt>+1", "<ctrl>+<alt>+2", "<ctrl>+<alt>+3"
         ];
 
-        let dbUrl = localStorage.getItem('northscript_db_url') || '';
+        const FIREBASE_URL = "https://northscriptdb-default-rtdb.europe-west1.firebasedatabase.app/.json";
+        
         let appData = { items: {} };
         let currentItemId = null;
 
-        function getDbUrl() {
-            if(!dbUrl) return null;
-            let url = dbUrl.trim();
-            if(url.endsWith('/')) url = url.slice(0, -1);
-            return url + '/.json';
-        }
-
-        async function fetchData() {
-            if (!dbUrl) {
-                document.getElementById('itemList').innerHTML = '<p class="text-red-500 text-sm p-4">Lütfen ayarlardan Firebase URL\'sini girin.</p>';
-                openSettings();
-                return;
-            }
+        async function loadData() {
             try {
-                const res = await fetch(getDbUrl());
+                const res = await fetch(FIREBASE_URL);
+                if (!res.ok) throw new Error('Failed to fetch');
                 const data = await res.json();
                 appData = data || { items: {} };
-                // Migrate old data 'folders' to 'items' if 'items' doesn't exist but 'folders' does
+                
+                // Migrate old folders if they exist
                 if (!appData.items && appData.folders) {
                     appData.items = {};
                     for (const [id, f] of Object.entries(appData.folders)) {
@@ -189,7 +180,7 @@
                         };
                     }
                     delete appData.folders;
-                    await saveData();
+                    saveData();
                 } else if (!appData.items) {
                     appData.items = {};
                 }
@@ -200,23 +191,22 @@
                 } else {
                     currentItemId = null;
                     document.getElementById('itemHeader').classList.add('hidden');
-                    document.getElementById('scriptList').innerHTML = '<div class="col-span-full text-center text-gray-400 mt-20"><i class="fa-solid fa-hand-pointer text-4xl mb-3"></i><p>Lütfen soldan bir kısayol öğesi seçin.</p></div>';
                 }
-            } catch (error) {
-                alert('Veri çekilirken hata oluştu: ' + error.message);
+            } catch (e) {
+                console.error(e);
+                alert("Veri çekilirken hata oluştu: " + e.message);
             }
         }
 
         async function saveData() {
-            if (!dbUrl) return;
             try {
-                await fetch(getDbUrl(), {
+                await fetch(FIREBASE_URL, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(appData)
                 });
-            } catch (error) {
-                alert('Veri kaydedilirken hata oluştu: ' + error.message);
+            } catch (e) {
+                alert("Veri kaydedilemedi!");
             }
         }
 
@@ -314,20 +304,10 @@
             }
         }
 
-        // --- Settings ---
-        function openSettings() {
-            document.getElementById('firebaseUrl').value = dbUrl;
-            document.getElementById('settingsModal').classList.remove('hidden');
-        }
-        function closeSettings() {
-            document.getElementById('settingsModal').classList.add('hidden');
-        }
-        function saveSettings() {
-            dbUrl = document.getElementById('firebaseUrl').value;
-            localStorage.setItem('northscript_db_url', dbUrl);
-            closeSettings();
-            fetchData();
-        }
+        // --- Initialization ---
+        window.onload = () => {
+            loadData();
+        };
 
         // --- Item Modal ---
         function populateHotkeys(selectElement, selectedValue) {
