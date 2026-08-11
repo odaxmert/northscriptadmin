@@ -22,10 +22,11 @@
 <body class="bg-gray-100 text-gray-800 font-sans antialiased h-screen flex flex-col">
     <!-- Header -->
     <header class="bg-dark text-white shadow-md p-4 flex justify-between items-center z-10">
-        <h1 class="text-xl font-bold"><i class="fa-solid fa-bolt mr-2 text-yellow-400"></i>NorthScript Panel</h1>
-        <div>
-            <button onclick="loadData()" class="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded mr-2 transition"><i class="fa-solid fa-sync mr-2"></i>Yenile</button>
+        <div class="flex items-center">
+            <h1 class="text-xl font-bold"><i class="fa-solid fa-bolt mr-2 text-yellow-400"></i>NorthScript Panel</h1>
+            <span id="modeBadge" class="ml-4 text-xs px-2 py-1 rounded font-semibold"></span>
         </div>
+        <div id="headerButtons" class="flex items-center space-x-2"></div>
     </header>
 
     <div class="flex-1 flex overflow-hidden">
@@ -33,7 +34,7 @@
         <aside class="w-1/3 bg-white border-r border-gray-200 p-4 overflow-y-auto flex flex-col">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-lg font-semibold text-gray-700">Kısayollar</h2>
-                <button onclick="openModal('create_root')" class="text-primary hover:text-blue-700"><i class="fa-solid fa-plus text-xl"></i></button>
+                <button id="addRootBtn" onclick="openModal('create_root')" class="text-primary hover:text-blue-700"><i class="fa-solid fa-plus text-xl"></i></button>
             </div>
             <div id="sidebarList" class="space-y-2 flex-1">
                 <p class="text-gray-500 text-sm text-center mt-10">Veri yükleniyor...</p>
@@ -51,7 +52,7 @@
                     <div id="headerActions" class="flex items-center space-x-3"></div>
                 </div>
             </div>
-            
+
             <div id="mainContentArea" class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div class="col-span-full text-center text-gray-400 mt-20">
                     <i class="fa-solid fa-hand-pointer text-4xl mb-3"></i>
@@ -65,7 +66,7 @@
     <div id="itemModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
         <div class="bg-white rounded-lg p-6 w-96 shadow-xl">
             <h3 id="itemModalTitle" class="text-lg font-bold mb-4">Yeni Kısayol Öğesi</h3>
-            
+
             <div class="mb-4">
                 <label class="block text-sm font-medium text-gray-700 mb-1">Tür</label>
                 <select id="itemType" onchange="toggleItemTypeFields()" class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:border-primary">
@@ -78,7 +79,7 @@
                 <label class="block text-sm font-medium text-gray-700 mb-1">İsim / Başlık</label>
                 <input type="text" id="itemName" class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:border-primary">
             </div>
-            
+
             <div id="itemHotkeyContainer" class="mb-4">
                 <label class="block text-sm font-medium text-gray-700 mb-1">Kısayol Tuşu</label>
                 <select id="itemHotkey" class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:border-primary font-mono"></select>
@@ -108,13 +109,27 @@
         ];
 
         const FIREBASE_URL = "https://northscript-a0702-default-rtdb.firebaseio.com/data.json";
-        
+        const DRAFT_KEY = 'northscript_draft_v1::' + FIREBASE_URL;
+
         let appData = { items: {} };
-        let currentPath = []; 
-        let modalMode = 'create_root'; 
+        let currentPath = [];
+        let modalMode = 'create_root';
         let modalTargetPath = [];
 
+        // --- Edit session state ---
+        let isEditing = false;       // true iken degisiklikler sadece tarayicida tutulur
+        let pendingChanges = 0;      // yayinlanmamis degisiklik sayisi
+        let baseRev = 0;             // duzenlemeye baslarken sunucudaki surum numarasi
+
         function generateId() { return Math.random().toString(36).substr(2, 9); }
+
+        // Kullanici metinleri HTML olarak degil, duz metin olarak gosterilmeli.
+        // (Bir script icerigi "<div>" gibi bir sey icerdiginde paneli bozmasin.)
+        function esc(value) {
+            return String(value ?? '').replace(/[&<>"']/g, c => (
+                { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+            ));
+        }
 
         function migrateToRecursive(obj) {
             if (!obj) return;
@@ -131,37 +146,190 @@
             }
         }
 
-        async function loadData() {
+        // ---------------------------------------------------------------
+        // Veri okuma / yazma
+        // ---------------------------------------------------------------
+        async function fetchRemote() {
+            const res = await fetch(FIREBASE_URL, { cache: 'no-store' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return (await res.json()) || {};
+        }
+
+        async function loadData({ silent = false } = {}) {
+            if (isEditing && pendingChanges > 0 && !silent) {
+                if (!confirm('Yayınlanmamış değişiklikleriniz var. Sunucudan yeniden yüklerseniz bunlar kaybolur. Devam edilsin mi?')) return;
+                discardDraft();
+            }
             try {
-                const res = await fetch(FIREBASE_URL);
-                if (!res.ok) throw new Error('Failed to fetch');
-                const data = await res.json();
-                appData = data || { items: {} };
+                const data = await fetchRemote();
+                appData = data;
                 if (!appData.items) appData.items = {};
-                
                 migrateToRecursive(appData.items);
-                
-                renderSidebar();
-                renderMainArea();
+                baseRev = Number(appData.meta?.rev) || 0;
+
+                isEditing = false;
+                pendingChanges = 0;
+                renderAll();
             } catch (e) {
                 alert("Veri çekilirken hata oluştu: " + e.message);
             }
         }
 
-        async function saveData() {
+        // ---------------------------------------------------------------
+        // Düzenleme oturumu
+        // ---------------------------------------------------------------
+        function readDraft() {
+            try {
+                const raw = localStorage.getItem(DRAFT_KEY);
+                return raw ? JSON.parse(raw) : null;
+            } catch { return null; }
+        }
+
+        function saveDraft() {
+            try {
+                localStorage.setItem(DRAFT_KEY, JSON.stringify({
+                    baseRev,
+                    pendingChanges,
+                    items: appData.items,
+                    savedAt: new Date().toISOString()
+                }));
+            } catch (e) {
+                console.warn('Taslak kaydedilemedi:', e);
+            }
+        }
+
+        function discardDraft() {
+            try { localStorage.removeItem(DRAFT_KEY); } catch {}
+            pendingChanges = 0;
+        }
+
+        function markDirty() {
+            pendingChanges += 1;
+            saveDraft();
+            renderHeaderButtons();
+        }
+
+        function startEditing() {
+            const draft = readDraft();
+            if (draft && draft.items) {
+                const when = draft.savedAt ? new Date(draft.savedAt).toLocaleString('tr-TR') : 'bilinmiyor';
+                if (confirm(`Yayınlanmamış bir taslak bulundu (${when}).\nDevam etmek için "Tamam", sıfırdan başlamak için "İptal".`)) {
+                    appData.items = draft.items;
+                    pendingChanges = Number(draft.pendingChanges) || 1;
+                } else {
+                    discardDraft();
+                }
+            }
+            isEditing = true;
+            renderAll();
+        }
+
+        function cancelEditing() {
+            if (pendingChanges > 0 && !confirm(`${pendingChanges} yayınlanmamış değişiklik silinecek. Emin misiniz?`)) return;
+            discardDraft();
+            loadData({ silent: true });
+        }
+
+        async function publishChanges() {
+            if (pendingChanges === 0) {
+                isEditing = false;
+                renderAll();
+                return;
+            }
+
+            let remote = null;
+            try {
+                remote = await fetchRemote();
+            } catch (e) {
+                return alert('Sunucu sürümü kontrol edilemedi, yayınlama iptal edildi.\nNedeni: ' + e.message);
+            }
+
+            const remoteRev = Number(remote?.meta?.rev) || 0;
+            if (remoteRev !== baseRev) {
+                const proceed = confirm(
+                    'DİKKAT: Siz düzenlerken veriler başka bir yerden değiştirilmiş.\n' +
+                    `(Sizin başlangıç sürümünüz: ${baseRev}, sunucudaki: ${remoteRev})\n\n` +
+                    '"Tamam" derseniz sizin sürümünüz diğerinin üzerine yazılır.\n' +
+                    '"İptal" derseniz hiçbir şey değişmez ve taslağınız korunur.'
+                );
+                if (!proceed) return;
+            }
+
+            const nextRev = Math.max(baseRev, remoteRev) + 1;
+            const payload = {
+                ...appData,
+                meta: { rev: nextRev, updatedAt: new Date().toISOString() }
+            };
+
             try {
                 const res = await fetch(FIREBASE_URL, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(appData)
+                    body: JSON.stringify(payload)
                 });
                 if (!res.ok) {
                     if (res.status === 429) throw new Error("Çok fazla istek yapıldı (Rate Limit). Lütfen 1 dakika bekleyip tekrar deneyin.");
                     throw new Error(`HTTP Hata: ${res.status}`);
                 }
             } catch (e) {
-                alert("Veri kaydedilemedi!\nNedeni: " + e.message);
-                throw e; // throw error so saveModalItem can catch or at least stop execution
+                return alert("Yayınlanamadı! Taslağınız korundu.\nNedeni: " + e.message);
+            }
+
+            appData = payload;
+            baseRev = nextRev;
+            discardDraft();
+            isEditing = false;
+            renderAll();
+            alert('Yayınlandı. Tüm NorthScript uygulamaları anında güncellenecek.');
+        }
+
+        function requireEditMode() {
+            if (isEditing) return true;
+            alert('Değişiklik yapmak için önce üst bardaki "DÜZENLEMEYE BAŞLA" butonuna basın.');
+            return false;
+        }
+
+        window.addEventListener('beforeunload', (e) => {
+            if (pendingChanges > 0) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        });
+
+        // ---------------------------------------------------------------
+        // Render
+        // ---------------------------------------------------------------
+        function renderAll() {
+            renderHeaderButtons();
+            renderSidebar();
+            renderMainArea();
+        }
+
+        function renderHeaderButtons() {
+            const badge = document.getElementById('modeBadge');
+            const buttons = document.getElementById('headerButtons');
+            const addRootBtn = document.getElementById('addRootBtn');
+
+            addRootBtn.classList.toggle('hidden', !isEditing);
+
+            if (isEditing) {
+                badge.className = 'ml-4 text-xs px-2 py-1 rounded font-semibold bg-amber-400 text-amber-900';
+                badge.innerText = pendingChanges > 0
+                    ? `DÜZENLEME MODU — ${pendingChanges} yayınlanmamış değişiklik`
+                    : 'DÜZENLEME MODU';
+
+                buttons.innerHTML = `
+                    <button onclick="cancelEditing()" class="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded transition"><i class="fa-solid fa-xmark mr-2"></i>İptal</button>
+                    <button onclick="publishChanges()" class="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded transition font-semibold"><i class="fa-solid fa-cloud-arrow-up mr-2"></i>KAYDET VE YAYINLA</button>
+                `;
+            } else {
+                badge.className = 'ml-4 text-xs px-2 py-1 rounded font-semibold bg-slate-600 text-slate-200';
+                badge.innerText = `Görüntüleme — sürüm ${baseRev}`;
+
+                buttons.innerHTML = `
+                    <button onclick="loadData()" class="bg-slate-600 hover:bg-slate-500 text-white px-4 py-2 rounded transition"><i class="fa-solid fa-sync mr-2"></i>Yenile</button>
+                    <button onclick="startEditing()" class="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded transition font-semibold"><i class="fa-solid fa-pen-to-square mr-2"></i>DÜZENLEMEYE BAŞLA</button>
+                `;
             }
         }
 
@@ -186,24 +354,29 @@
             const list = document.getElementById('sidebarList');
             list.innerHTML = '';
             const items = appData.items || {};
-            
+
+            if (Object.keys(items).length === 0) {
+                list.innerHTML = '<p class="text-gray-500 text-sm text-center mt-10">Henüz kısayol yok.</p>';
+                return;
+            }
+
             const groups = {};
             for (const [id, item] of Object.entries(items)) {
                 const hk = item.hotkey || 'Atanmadı';
                 if (!groups[hk]) groups[hk] = {};
                 groups[hk][id] = item;
             }
-            
+
             for (const [hk, groupItems] of Object.entries(groups)) {
-                list.innerHTML += `<div class="text-xs font-bold text-gray-400 mt-4 mb-2 uppercase tracking-wide border-b pb-1"><i class="fa-solid fa-keyboard mr-1"></i> ${hk}</div>`;
+                list.innerHTML += `<div class="text-xs font-bold text-gray-400 mt-4 mb-2 uppercase tracking-wide border-b pb-1"><i class="fa-solid fa-keyboard mr-1"></i> ${esc(hk)}</div>`;
                 for (const [id, item] of Object.entries(groupItems)) {
                     const isSelected = currentPath.length > 0 && currentPath[0] === id;
                     const activeClass = isSelected ? 'bg-blue-50 border-blue-500 border-l-4' : 'hover:bg-gray-50 border-l-4 border-transparent';
                     const icon = item.type === 'folder' ? '<i class="fa-solid fa-folder text-yellow-500 mr-2"></i>' : '<i class="fa-solid fa-file-lines text-green-500 mr-2"></i>';
-                    
+
                     list.innerHTML += `
                         <div onclick="selectRootItem('${id}')" class="cursor-pointer p-2 rounded shadow-sm bg-white ${activeClass} transition mb-1">
-                            <div class="font-bold text-gray-800 text-sm flex items-center">${icon} ${item.name}</div>
+                            <div class="font-bold text-gray-800 text-sm flex items-center">${icon} ${esc(item.name)}</div>
                         </div>
                     `;
                 }
@@ -229,7 +402,7 @@
         function renderMainArea() {
             const header = document.getElementById('mainHeader');
             const contentArea = document.getElementById('mainContentArea');
-            
+
             if (currentPath.length === 0) {
                 header.classList.add('hidden');
                 contentArea.innerHTML = `
@@ -239,72 +412,82 @@
                     </div>`;
                 return;
             }
-            
+
             header.classList.remove('hidden');
-            
+
             let breadcrumbHtml = `<span class="cursor-pointer text-blue-500 hover:underline" onclick="currentPath=[]; renderSidebar(); renderMainArea();"><i class="fa-solid fa-home"></i></span> <span class="mx-2 text-gray-400">/</span> `;
             let currentItem = null;
-            
+
             for (let i = 0; i < currentPath.length; i++) {
                 currentItem = getItemAt(currentPath.slice(0, i + 1));
                 if (!currentItem) { currentPath = []; renderSidebar(); renderMainArea(); return; }
-                
+
                 const icon = currentItem.type === 'folder' ? '<i class="fa-solid fa-folder text-yellow-500 mr-1 text-base"></i>' : '<i class="fa-solid fa-file-lines text-green-500 mr-1 text-base"></i>';
-                
+
                 if (i === currentPath.length - 1) {
-                    breadcrumbHtml += `<span class="font-bold text-gray-800 flex items-center">${icon}${currentItem.name}</span>`;
+                    breadcrumbHtml += `<span class="font-bold text-gray-800 flex items-center">${icon}${esc(currentItem.name)}</span>`;
                 } else {
-                    breadcrumbHtml += `<span class="cursor-pointer text-blue-500 hover:underline flex items-center" onclick="goBack(${i})">${icon}${currentItem.name}</span> <span class="mx-2 text-gray-400">/</span> `;
+                    breadcrumbHtml += `<span class="cursor-pointer text-blue-500 hover:underline flex items-center" onclick="goBack(${i})">${icon}${esc(currentItem.name)}</span> <span class="mx-2 text-gray-400">/</span> `;
                 }
             }
-            
+
             document.getElementById('breadcrumbContainer').innerHTML = breadcrumbHtml;
-            
+
             const isRoot = currentPath.length === 1;
-            const hkBadge = isRoot ? `<span class="text-sm bg-gray-200 px-2 py-1 rounded font-mono"><i class="fa-solid fa-keyboard mr-1"></i>${currentItem.hotkey || ''}</span>` : '';
-            const addBtn = currentItem.type === 'folder' ? `<button onclick="openModal('create_child', [${currentPath.map(p=>`'${p}'`).join(',')}])" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 text-sm rounded shadow transition"><i class="fa-solid fa-plus mr-1"></i>Yeni Ekle</button>` : '';
-            
-            document.getElementById('headerActions').innerHTML = `
-                ${hkBadge}
-                <button onclick="openModal('edit', [${currentPath.map(p=>`'${p}'`).join(',')}])" class="text-gray-500 hover:text-gray-800"><i class="fa-solid fa-edit"></i></button>
-                <button onclick="deleteItemAction([${currentPath.map(p=>`'${p}'`).join(',')}])" class="text-red-500 hover:text-red-700"><i class="fa-solid fa-trash"></i></button>
-                ${addBtn}
-            `;
-            
+            const pathArgs = currentPath.map(p => `'${p}'`).join(',');
+            const hkBadge = isRoot ? `<span class="text-sm bg-gray-200 px-2 py-1 rounded font-mono"><i class="fa-solid fa-keyboard mr-1"></i>${esc(currentItem.hotkey || '')}</span>` : '';
+
+            let actionsHtml = hkBadge;
+            if (isEditing) {
+                const addBtn = currentItem.type === 'folder'
+                    ? `<button onclick="openModal('create_child', [${pathArgs}])" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 text-sm rounded shadow transition"><i class="fa-solid fa-plus mr-1"></i>Yeni Ekle</button>`
+                    : '';
+                actionsHtml += `
+                    <button onclick="openModal('edit', [${pathArgs}])" class="text-gray-500 hover:text-gray-800"><i class="fa-solid fa-edit"></i></button>
+                    <button onclick="deleteItemAction([${pathArgs}])" class="text-red-500 hover:text-red-700"><i class="fa-solid fa-trash"></i></button>
+                    ${addBtn}
+                `;
+            }
+            document.getElementById('headerActions').innerHTML = actionsHtml;
+
             contentArea.innerHTML = '';
-            
+
             if (currentItem.type === 'script') {
                 contentArea.innerHTML = `
                     <div class="col-span-full bg-white p-6 rounded-lg shadow-sm border border-gray-100">
                         <h3 class="text-lg font-bold mb-4 text-gray-700 border-b pb-2">Metin İçeriği</h3>
-                        <p class="text-gray-800 whitespace-pre-wrap">${currentItem.content || ''}</p>
+                        <p class="text-gray-800 whitespace-pre-wrap">${esc(currentItem.content || '')}</p>
                     </div>`;
                 return;
             }
-            
+
             const children = currentItem.children || {};
             if (Object.keys(children).length === 0) {
                 contentArea.innerHTML = '<div class="col-span-full text-center text-gray-400 py-10">Bu klasör boş.</div>';
                 return;
             }
-            
+
             for (const [cid, child] of Object.entries(children)) {
                 const isFolder = child.type === 'folder';
                 const icon = isFolder ? '<i class="fa-solid fa-folder text-yellow-500 text-lg"></i>' : '<i class="fa-solid fa-file-lines text-green-500 text-lg"></i>';
-                
+                const childArgs = [...currentPath, cid].map(p => `'${p}'`).join(',');
+
+                const childActions = isEditing ? `
+                    <div class="space-x-3 text-sm">
+                        <button onclick="openModal('edit', [${childArgs}])" class="text-gray-400 hover:text-blue-500"><i class="fa-solid fa-pen"></i></button>
+                        <button onclick="deleteItemAction([${childArgs}])" class="text-gray-400 hover:text-red-500"><i class="fa-solid fa-trash"></i></button>
+                    </div>` : '';
+
                 contentArea.innerHTML += `
                     <div class="bg-white p-4 rounded-lg shadow border border-gray-100 flex flex-col justify-between hover:shadow-md transition">
                         <div>
                             <div class="flex justify-between items-start mb-2">
-                                <h4 class="font-bold text-gray-800 flex items-center space-x-2"><span>${icon}</span> <span>${child.name}</span></h4>
-                                <div class="space-x-3 text-sm">
-                                    <button onclick="openModal('edit', [${[...currentPath, cid].map(p=>`'${p}'`).join(',')}])" class="text-gray-400 hover:text-blue-500"><i class="fa-solid fa-pen"></i></button>
-                                    <button onclick="deleteItemAction([${[...currentPath, cid].map(p=>`'${p}'`).join(',')}])" class="text-gray-400 hover:text-red-500"><i class="fa-solid fa-trash"></i></button>
-                                </div>
+                                <h4 class="font-bold text-gray-800 flex items-center space-x-2"><span>${icon}</span> <span>${esc(child.name)}</span></h4>
+                                ${childActions}
                             </div>
-                            ${isFolder ? 
-                                `<button onclick="enterFolder('${cid}')" class="mt-3 w-full bg-blue-50 hover:bg-blue-100 text-blue-600 py-2 rounded text-sm transition font-semibold"><i class="fa-solid fa-folder-open mr-2"></i>İçine Gir</button>` : 
-                                `<p class="text-sm text-gray-600 whitespace-pre-wrap line-clamp-3 mt-2 bg-gray-50 p-2 rounded">${child.content}</p>`}
+                            ${isFolder ?
+                                `<button onclick="enterFolder('${cid}')" class="mt-3 w-full bg-blue-50 hover:bg-blue-100 text-blue-600 py-2 rounded text-sm transition font-semibold"><i class="fa-solid fa-folder-open mr-2"></i>İçine Gir</button>` :
+                                `<p class="text-sm text-gray-600 whitespace-pre-wrap line-clamp-3 mt-2 bg-gray-50 p-2 rounded">${esc(child.content)}</p>`}
                         </div>
                     </div>
                 `;
@@ -332,17 +515,19 @@
         }
 
         function openModal(mode, pathArray = []) {
+            if (!requireEditMode()) return;
+
             modalMode = mode;
             modalTargetPath = pathArray;
-            
+
             const hkContainer = document.getElementById('itemHotkeyContainer');
             const typeSelect = document.getElementById('itemType');
             const hkSelect = document.getElementById('itemHotkey');
             const title = document.getElementById('itemModalTitle');
-            
+
             document.getElementById('itemName').value = '';
             document.getElementById('itemContent').value = '';
-            
+
             if (mode === 'create_root') {
                 hkContainer.classList.remove('hidden');
                 typeSelect.disabled = false; typeSelect.value = 'folder';
@@ -355,38 +540,40 @@
             } else if (mode === 'edit') {
                 const item = getItemAt(pathArray);
                 const isRoot = pathArray.length === 1;
-                
+
                 if (isRoot) {
                     hkContainer.classList.remove('hidden');
                     populateHotkeys(hkSelect, item.hotkey || '');
                 } else {
                     hkContainer.classList.add('hidden');
                 }
-                
+
                 typeSelect.value = item.type || 'folder';
                 typeSelect.disabled = true; // Cannot change type after creation
                 document.getElementById('itemName').value = item.name;
                 document.getElementById('itemContent').value = item.content || '';
                 title.innerText = 'Öğeyi Düzenle';
             }
-            
+
             toggleItemTypeFields();
             document.getElementById('itemModal').classList.remove('hidden');
         }
 
         function closeModal() { document.getElementById('itemModal').classList.add('hidden'); }
 
-        async function saveModalItem() {
+        function saveModalItem() {
+            if (!requireEditMode()) return;
+
             const type = document.getElementById('itemType').value;
             const name = document.getElementById('itemName').value.trim();
             const content = document.getElementById('itemContent').value.trim();
-            
+
             if (!name) return alert('İsim boş olamaz.');
             if (type === 'script' && !content) return alert('Metin içeriği boş olamaz.');
-            
+
             let isRoot = false;
             let itemObj = null;
-            
+
             if (modalMode === 'edit') {
                 itemObj = getItemAt(modalTargetPath);
                 itemObj.name = name;
@@ -396,7 +583,7 @@
                 itemObj = { type: type, name: name };
                 if (type === 'folder') itemObj.children = {};
                 if (type === 'script') itemObj.content = content;
-                
+
                 const newId = 'item_' + generateId();
                 if (modalMode === 'create_root') {
                     appData.items[newId] = itemObj;
@@ -409,25 +596,27 @@
                     parent.children[newId] = itemObj;
                 }
             }
-            
+
             if (isRoot) {
                 const hotkey = document.getElementById('itemHotkey').value;
                 if (!hotkey) return alert('Ana öğeler için kısayol seçmelisiniz.');
                 itemObj.hotkey = hotkey;
             }
-            
-            await saveData();
+
+            markDirty();
             closeModal();
             renderSidebar();
             renderMainArea();
         }
 
-        async function deleteItemAction(pathArray) {
+        function deleteItemAction(pathArray) {
+            if (!requireEditMode()) return;
+
             if (confirm('Bu öğeyi (ve varsa içindeki tüm alt klasör/metinleri) silmek istediğinize emin misiniz?')) {
                 const container = getParentContainer(pathArray);
                 const id = pathArray[pathArray.length - 1];
                 delete container[id];
-                
+
                 // If we deleted an ancestor of what we are viewing, go back to root
                 let viewingDeleted = false;
                 for(let i=0; i<pathArray.length; i++) {
@@ -435,18 +624,18 @@
                         viewingDeleted = true;
                     }
                 }
-                
+
                 if (viewingDeleted) {
                     currentPath = currentPath.slice(0, pathArray.length - 1);
                 }
-                
-                await saveData();
+
+                markDirty();
                 renderSidebar();
                 renderMainArea();
             }
         }
 
-        window.onload = loadData;
+        window.onload = () => loadData({ silent: true });
     </script>
 </body>
 </html>
