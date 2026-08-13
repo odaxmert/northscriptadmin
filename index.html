@@ -97,6 +97,27 @@
         </div>
     </div>
 
+    <!-- Move Item Modal -->
+    <div id="moveModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg p-6 w-[32rem] max-h-[85vh] shadow-xl flex flex-col">
+            <h3 class="text-lg font-bold mb-1">Öğeyi Taşı</h3>
+            <p id="moveSourceLabel" class="text-sm text-gray-500 mb-4"></p>
+
+            <label class="block text-sm font-medium text-gray-700 mb-1">Hedef Konum</label>
+            <div id="moveTree" class="border border-gray-300 rounded p-2 mb-4 bg-gray-50 overflow-y-auto flex-1 min-h-[8rem]"></div>
+
+            <div id="moveHotkeyContainer" class="mb-4 hidden">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Kısayol Tuşu (ana seviye için zorunlu)</label>
+                <select id="moveHotkey" class="w-full border border-gray-300 rounded px-3 py-2 focus:outline-none focus:border-primary font-mono"></select>
+            </div>
+
+            <div class="flex justify-end space-x-2">
+                <button onclick="closeMoveModal()" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">İptal</button>
+                <button onclick="confirmMove()" class="px-4 py-2 bg-primary text-white rounded hover:bg-blue-600"><i class="fa-solid fa-arrow-right-arrow-left mr-2"></i>Taşı</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const PREDEFINED_HOTKEYS = [
             "<ctrl>+q", "<ctrl>+w", "<ctrl>+e", "<ctrl>+r", "<ctrl>+t", "<ctrl>+y", "<ctrl>+u", "<ctrl>+i", "<ctrl>+o", "<ctrl>+p",
@@ -108,7 +129,14 @@
             "<ctrl>+<alt>+q", "<ctrl>+<alt>+w", "<ctrl>+<alt>+e", "<ctrl>+<alt>+1", "<ctrl>+<alt>+2", "<ctrl>+<alt>+3"
         ];
 
+        // Exe'lerin okudugu dagitim kopyasi. Firebase kurallariyla kisitlandi:
+        // sadece veri degistikten sonraki kisa pencerede okunabilir.
         const FIREBASE_URL = "https://northscript-a0702-default-rtdb.firebaseio.com/data.json";
+
+        // Panelin okudugu yonetim kopyasi. Okumasi her zaman aciktir; boylece
+        // dagitim kopyasi kapaliyken de panel calisir.
+        const ADMIN_URL = "https://northscript-a0702-default-rtdb.firebaseio.com/admin.json";
+
         const DRAFT_KEY = 'northscript_draft_v1::' + FIREBASE_URL;
 
         let appData = { items: {} };
@@ -149,10 +177,52 @@
         // ---------------------------------------------------------------
         // Veri okuma / yazma
         // ---------------------------------------------------------------
-        async function fetchRemote() {
-            const res = await fetch(FIREBASE_URL, { cache: 'no-store' });
+        async function fetchJson(url) {
+            const res = await fetch(url, { cache: 'no-store' });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return (await res.json()) || {};
+        }
+
+        async function putJson(url, payload) {
+            const res = await fetch(url, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+                if (res.status === 429) throw new Error('Çok fazla istek yapıldı (Rate Limit). Lütfen 1 dakika bekleyip tekrar deneyin.');
+                if (res.status === 401) throw new Error('Yazma izni reddedildi. Firebase kurallarını kontrol edin.');
+                throw new Error(`HTTP Hata: ${res.status}`);
+            }
+        }
+
+        // Panel her zaman yonetim kopyasini okur.
+        // Ilk kurulumda /admin henuz olusmamistir; o tek seferde eski /data
+        // yolundan devralinir ve ilk yayinla birlikte iki yol da dolar.
+        async function fetchRemote() {
+            const admin = await fetchJson(ADMIN_URL);
+            if (admin && admin.items) return admin;
+
+            let legacyError = null;
+            try {
+                const legacy = await fetchJson(FIREBASE_URL);
+                if (legacy && legacy.items) return legacy;
+            } catch (e) {
+                legacyError = e;
+            }
+
+            // Iki kaynaktan da veri gelmedi. Sessizce bos donersek kullanici
+            // bos veriyi yayinlayip tum kisayollari silebilir; bu yuzden hata veriyoruz.
+            if (legacyError) {
+                throw new Error(
+                    'Veri okunamadı. Yönetim kopyası (/admin) henüz oluşmamış ve ' +
+                    'dağıtım kopyası (/data) kurallar tarafından kapatılmış görünüyor.\n\n' +
+                    'Çözüm: Firebase kurallarında /data okumasını geçici olarak açın, ' +
+                    'panelden bir kez yayın yapın, sonra kuralları geri koyun.\n\n' +
+                    'Ayrıntı: ' + legacyError.message
+                );
+            }
+            return admin;
         }
 
         async function loadData({ silent = false } = {}) {
@@ -237,6 +307,11 @@
                 return;
             }
 
+            // Son emniyet: bos veri yayinlamak tum bilgisayarlardaki kisayollari siler.
+            if (!appData.items || Object.keys(appData.items).length === 0) {
+                if (!confirm('DİKKAT: Yayınlanacak veri BOŞ.\n\nBu işlem tüm bilgisayarlardaki kısayolları siler. Gerçekten devam edilsin mi?')) return;
+            }
+
             let remote = null;
             try {
                 remote = await fetchRemote();
@@ -258,29 +333,32 @@
             const nextRev = Math.max(baseRev, remoteRev) + 1;
             const payload = {
                 ...appData,
-                meta: { rev: nextRev, updatedAt: new Date().toISOString() }
+                meta: {
+                    rev: nextRev,
+                    updatedAt: new Date().toISOString(),
+                    // Sunucu saati. Firebase kurallari okuma penceresini bu damgaya
+                    // gore actigi icin tarayici saatine guvenilmez.
+                    updatedAtMs: { '.sv': 'timestamp' }
+                }
             };
 
             try {
-                const res = await fetch(FIREBASE_URL, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (!res.ok) {
-                    if (res.status === 429) throw new Error("Çok fazla istek yapıldı (Rate Limit). Lütfen 1 dakika bekleyip tekrar deneyin.");
-                    throw new Error(`HTTP Hata: ${res.status}`);
-                }
+                // Once yonetim kopyasi, sonra dagitim kopyasi.
+                // Dagitim kopyasi en sona birakilir: okuma penceresi ancak veri
+                // eksiksiz yazildiktan sonra acilsin.
+                await putJson(ADMIN_URL, payload);
+                await putJson(FIREBASE_URL, payload);
             } catch (e) {
                 return alert("Yayınlanamadı! Taslağınız korundu.\nNedeni: " + e.message);
             }
 
-            appData = payload;
+            // Sunucu damgasi yerel kopyada sentinel olarak kalmasin.
+            appData = { ...payload, meta: { ...payload.meta, updatedAtMs: Date.now() } };
             baseRev = nextRev;
             discardDraft();
             isEditing = false;
             renderAll();
-            alert('Yayınlandı. Tüm NorthScript uygulamaları anında güncellenecek.');
+            alert('Yayınlandı. Tüm bilgisayarlar en geç 1 dakika içinde güncellenecek.');
         }
 
         function requireEditMode() {
@@ -374,9 +452,16 @@
                     const activeClass = isSelected ? 'bg-blue-50 border-blue-500 border-l-4' : 'hover:bg-gray-50 border-l-4 border-transparent';
                     const icon = item.type === 'folder' ? '<i class="fa-solid fa-folder text-yellow-500 mr-2"></i>' : '<i class="fa-solid fa-file-lines text-green-500 mr-2"></i>';
 
+                    const moveBtn = isEditing
+                        ? `<button onclick="event.stopPropagation(); openMoveModal(['${id}'])" title="Taşı" class="text-gray-400 hover:text-primary px-1 shrink-0"><i class="fa-solid fa-arrow-right-arrow-left"></i></button>`
+                        : '';
+
                     list.innerHTML += `
                         <div onclick="selectRootItem('${id}')" class="cursor-pointer p-2 rounded shadow-sm bg-white ${activeClass} transition mb-1">
-                            <div class="font-bold text-gray-800 text-sm flex items-center">${icon} ${esc(item.name)}</div>
+                            <div class="font-bold text-gray-800 text-sm flex items-center justify-between">
+                                <span class="flex items-center min-w-0">${icon}<span class="truncate">${esc(item.name)}</span></span>
+                                ${moveBtn}
+                            </div>
                         </div>
                     `;
                 }
@@ -443,8 +528,9 @@
                     ? `<button onclick="openModal('create_child', [${pathArgs}])" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 text-sm rounded shadow transition"><i class="fa-solid fa-plus mr-1"></i>Yeni Ekle</button>`
                     : '';
                 actionsHtml += `
-                    <button onclick="openModal('edit', [${pathArgs}])" class="text-gray-500 hover:text-gray-800"><i class="fa-solid fa-edit"></i></button>
-                    <button onclick="deleteItemAction([${pathArgs}])" class="text-red-500 hover:text-red-700"><i class="fa-solid fa-trash"></i></button>
+                    <button onclick="openModal('edit', [${pathArgs}])" title="Düzenle" class="text-gray-500 hover:text-gray-800"><i class="fa-solid fa-edit"></i></button>
+                    <button onclick="openMoveModal([${pathArgs}])" title="Taşı" class="text-gray-500 hover:text-primary"><i class="fa-solid fa-arrow-right-arrow-left"></i></button>
+                    <button onclick="deleteItemAction([${pathArgs}])" title="Sil" class="text-red-500 hover:text-red-700"><i class="fa-solid fa-trash"></i></button>
                     ${addBtn}
                 `;
             }
@@ -473,9 +559,10 @@
                 const childArgs = [...currentPath, cid].map(p => `'${p}'`).join(',');
 
                 const childActions = isEditing ? `
-                    <div class="space-x-3 text-sm">
-                        <button onclick="openModal('edit', [${childArgs}])" class="text-gray-400 hover:text-blue-500"><i class="fa-solid fa-pen"></i></button>
-                        <button onclick="deleteItemAction([${childArgs}])" class="text-gray-400 hover:text-red-500"><i class="fa-solid fa-trash"></i></button>
+                    <div class="space-x-3 text-sm shrink-0">
+                        <button onclick="openModal('edit', [${childArgs}])" title="Düzenle" class="text-gray-400 hover:text-blue-500"><i class="fa-solid fa-pen"></i></button>
+                        <button onclick="openMoveModal([${childArgs}])" title="Taşı" class="text-gray-400 hover:text-primary"><i class="fa-solid fa-arrow-right-arrow-left"></i></button>
+                        <button onclick="deleteItemAction([${childArgs}])" title="Sil" class="text-gray-400 hover:text-red-500"><i class="fa-solid fa-trash"></i></button>
                     </div>` : '';
 
                 contentArea.innerHTML += `
@@ -633,6 +720,147 @@
                 renderSidebar();
                 renderMainArea();
             }
+        }
+
+        // ---------------------------------------------------------------
+        // Tasima (move)
+        // ---------------------------------------------------------------
+        let moveSourcePath = [];
+        let moveTargetPath = null;   // null = henuz secilmedi, [] = ana seviye
+        let moveTreeNodes = [];      // onclick'te tirnak kacisi derdi olmasin diye indeksli erisim
+
+        function isSamePath(a, b) {
+            return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
+        }
+
+        // Hedef, kaynagin kendisi mi ya da onun icinde mi?
+        // (Bir klasoru kendi altina tasimak agaci kopariri; bunu engelliyoruz.)
+        function isInsidePath(target, source) {
+            if (target.length < source.length) return false;
+            return source.every((v, i) => target[i] === v);
+        }
+
+        function openMoveModal(pathArray) {
+            if (!requireEditMode()) return;
+
+            const item = getItemAt(pathArray);
+            if (!item) return;
+
+            moveSourcePath = pathArray;
+            moveTargetPath = null;
+
+            const kind = item.type === 'folder' ? 'Klasör' : 'Metin';
+            document.getElementById('moveSourceLabel').innerText = `${kind}: ${item.name}`;
+            populateHotkeys(document.getElementById('moveHotkey'), item.hotkey || '');
+
+            renderMoveTree();
+            document.getElementById('moveModal').classList.remove('hidden');
+        }
+
+        function closeMoveModal() {
+            document.getElementById('moveModal').classList.add('hidden');
+            moveTargetPath = null;
+        }
+
+        function moveRowHtml(labelHtml, path, depth) {
+            const index = moveTreeNodes.length;
+            moveTreeNodes.push(path);
+
+            const isSelf = path.length > 0 && isInsidePath(path, moveSourcePath);
+            const isCurrentParent = isSamePath(path, moveSourcePath.slice(0, -1));
+            const disabled = isSelf || isCurrentParent;
+            const selected = moveTargetPath !== null && isSamePath(path, moveTargetPath);
+
+            let cls = 'flex items-center px-2 py-1.5 rounded text-sm transition ';
+            let note = '';
+            if (disabled) {
+                cls += 'text-gray-400 cursor-not-allowed';
+                note = isCurrentParent
+                    ? '<span class="ml-2 text-xs italic">(mevcut konum)</span>'
+                    : '<span class="ml-2 text-xs italic">(kendi içine taşınamaz)</span>';
+            } else if (selected) {
+                cls += 'bg-primary text-white cursor-pointer font-semibold';
+            } else {
+                cls += 'hover:bg-blue-50 cursor-pointer';
+            }
+
+            const handler = disabled ? '' : `onclick="selectMoveTarget(${index})"`;
+            return `<div ${handler} class="${cls}" style="margin-left:${depth * 18}px">${labelHtml}${note}</div>`;
+        }
+
+        function moveTreeRows(container, parentPath, depth) {
+            let html = '';
+            for (const [id, item] of Object.entries(container || {})) {
+                if (item.type !== 'folder') continue;   // Sadece klasorlerin icine tasinabilir
+                const path = [...parentPath, id];
+                html += moveRowHtml(`<i class="fa-solid fa-folder text-yellow-500 mr-2"></i>${esc(item.name)}`, path, depth);
+                html += moveTreeRows(item.children, path, depth + 1);
+            }
+            return html;
+        }
+
+        function renderMoveTree() {
+            moveTreeNodes = [];
+            let html = moveRowHtml('<i class="fa-solid fa-house text-blue-500 mr-2"></i>Ana Seviye', [], 0);
+            html += moveTreeRows(appData.items, [], 1);
+            document.getElementById('moveTree').innerHTML = html;
+
+            // Ana seviyedeki her ogenin bir kisayolu olmak zorunda.
+            const needsHotkey = moveTargetPath !== null && moveTargetPath.length === 0;
+            document.getElementById('moveHotkeyContainer').classList.toggle('hidden', !needsHotkey);
+        }
+
+        function selectMoveTarget(index) {
+            moveTargetPath = moveTreeNodes[index];
+            renderMoveTree();
+        }
+
+        function confirmMove() {
+            if (!requireEditMode()) return;
+            if (moveTargetPath === null) return alert('Lütfen bir hedef konum seçin.');
+            if (isInsidePath(moveTargetPath, moveSourcePath)) return alert('Bir klasör kendi içine taşınamaz.');
+
+            const toRoot = moveTargetPath.length === 0;
+
+            let hotkey = '';
+            if (toRoot) {
+                hotkey = document.getElementById('moveHotkey').value;
+                if (!hotkey) return alert('Ana seviyedeki öğeler için kısayol seçmelisiniz.');
+            }
+
+            // Kaynak ve hedef, silme isleminden ONCE cozulmeli.
+            const id = moveSourcePath[moveSourcePath.length - 1];
+            const srcContainer = getParentContainer(moveSourcePath);
+            const item = srcContainer ? srcContainer[id] : null;
+            if (!item) return alert('Taşınacak öğe bulunamadı.');
+
+            let destContainer;
+            if (toRoot) {
+                destContainer = appData.items;
+            } else {
+                const destItem = getItemAt(moveTargetPath);
+                if (!destItem || destItem.type !== 'folder') return alert('Hedef klasör bulunamadı.');
+                if (!destItem.children) destItem.children = {};
+                destContainer = destItem.children;
+            }
+
+            delete srcContainer[id];
+
+            // Kimlikler rastgele, yine de teorik cakismaya karsi guvence.
+            let newId = id;
+            while (destContainer[newId]) newId = 'item_' + generateId();
+
+            // Kisayol sadece ana seviyede anlamli.
+            if (toRoot) item.hotkey = hotkey;
+            else delete item.hotkey;
+
+            destContainer[newId] = item;
+            currentPath = [...moveTargetPath, newId];
+
+            markDirty();
+            closeMoveModal();
+            renderSidebar();
+            renderMainArea();
         }
 
         window.onload = () => loadData({ silent: true });
